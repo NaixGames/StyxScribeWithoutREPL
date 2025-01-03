@@ -20,10 +20,6 @@ from asyncio import create_subprocess_exec as Popen
 from asyncio.subprocess import PIPE, STDOUT
 import traceback
 
-# Do not include extension
-EXECUTABLE_NAMES = { "hades" : "Hades", "pyre": "Pyre" }
-# Do not include leading character (/ or -)
-EXECUTABLE_ARGS = ["DebugDraw=true", "DebugKeysEnabled=true", "RequireFocusToUpdate=false"]
 PLUGIN_SUBPATH = "StyxScribeScripts"
 LUA_PROXY_STDIN = "proxy_stdin.txt"
 LUA_PROXY_FALSE = "proxy_first.txt"
@@ -130,22 +126,34 @@ class StyxScribe():
                 return True
             return self.__contains__(key)
 
-    def __init__(self, game="Hades"):
-        self.executable_name = EXECUTABLE_NAMES[game.lower()]
-        if platform.system() != "Darwin":
+    def __init__(self, game = "Hades", build = "x64", args = tuple()):
+        self.executable_name = game
+        if platform.system() == "Linux":
             self.executable_purepath = (
-                pathlib.PurePath() / "x64" / f"{self.executable_name}.exe"
+                pathlib.Path.cwd() / build / f"{self.executable_name}.exe"
+            )
+            self.args = [f"/{arg}" for arg in args]
+            self.plugins_paths = [str(
+                pathlib.PurePath() / "Content" / PLUGIN_SUBPATH
+            )]
+        elif platform.system() == "Windows":
+            self.executable_purepath = (
+                pathlib.PurePath() / build / f"{self.executable_name}.exe"
             )
             self.args = [f"/{arg}" for arg in EXECUTABLE_ARGS]
             self.plugins_paths = [str(
                 pathlib.PurePath() / "Content" / PLUGIN_SUBPATH
             )]
-        else:
+        elif platform.system() == "Darwin":
             self.executable_purepath = pathlib.PurePath() / self.executable_name
             self.args = [f"-{arg}" for arg in executable_args]
             self.plugins_paths = [str(
                 pathlib.PurePath() / "Contents/Resources/Content" / PLUGIN_SUBPATH
             )]
+
+        else:
+            print("Unknown platform!")
+            sys.exit(1)
 
         self.executable_cwd_purepath = self.executable_purepath.parent
         if self.executable_name == "Pyre":
@@ -268,12 +276,43 @@ class StyxScribe():
         async def run(out=None):
             setup_proxies()
 
-            self.game = await Popen(
-                str(self.args[0]),*self.args[0:],
-                cwd=self.executable_purepath.parent,
-                stdout=PIPE,
-                stderr=STDOUT
-            )
+            if platform.system() == "Linux":
+                # Hacky means to get the steamapps folder
+                self.steamapps_path = self.executable_purepath.parent.parent.parent.parent
+
+                # Set up Proton paths
+                self.proton_path = pathlib.PurePath(self.steamapps_path) / "common/Proton 8.0/proton"
+                self.compat_data_path = pathlib.PurePath(self.steamapps_path) / "compatdata/1145360"
+                self.steam_client_path = pathlib.PurePath(self.steamapps_path) / "common"
+
+                # Set commandline and environment
+                self.args = [
+                    self.proton_path,
+                    "run",
+                    str(self.executable_purepath)
+                ]
+                env = {
+                    **os.environ,  # Inherit existing environment
+                    "STEAM_COMPAT_DATA_PATH": self.compat_data_path,
+                    "STEAM_COMPAT_CLIENT_INSTALL_PATH": self.steam_client_path
+                }
+
+                # Launch the game
+                self.game = await Popen(
+                    self.args[0],  # Proton path
+                    *self.args[1:],  # Proton arguments
+                    cwd=str(self.executable_purepath.parent),
+                    env=env,
+                    stdout=PIPE,
+                    stderr=STDOUT
+                )
+            else:
+                self.game = await Popen(
+                    str(self.args[0]),*self.args[0:],
+                    cwd=self.executable_purepath.parent,
+                    stdout=PIPE,
+                    stderr=STDOUT
+                )
 
             self.loop = asyncio.get_event_loop()
             self.queue = asyncio.Queue()
